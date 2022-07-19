@@ -43,9 +43,9 @@ Resources:
             list_instances_modified = []
             for reservation in instances['Reservations']:
               for instance in reservation['Instances']:
-                d = next((d for d in instance['Tags'] if d.get('Key') == 'k8s.io/cluster-autoscaler/enabled'), None)
+                d = next((d for d in instance['Tags'] if d.get('Key') == 'tagnamehere'), None)
                 if d is not None:
-                  if d['Value'] == 'true':
+                  if d['Value'] == 'tagvaluehere':
                     metadata = instance['MetadataOptions']
                     if ((metadata['HttpTokens'] == 'optional') and (instance['State']['Name']!="terminated")):
                       print ("Instance metadata for "+instance['InstanceId']+" has been updated succssfully to IMDSv2")
