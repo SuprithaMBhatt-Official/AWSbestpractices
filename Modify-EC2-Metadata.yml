@@ -1,0 +1,131 @@
+Parameters:
+  Regions:
+    Type: String
+    Default: "us-east-1"
+    Description: Specify all the region where you wish to update the IMDSv2 of instances.(Note!:Do not give spaces, separate each region with a comma)
+Resources:
+  UpdateEC2IMDSv2LambdaIAMRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      Path: "/lambda/servicerole/"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEC2FullAccess
+        - arn:aws:iam::aws:policy/CloudWatchFullAccess
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal:
+              Service: [lambda.amazonaws.com]
+            Action:
+              - sts:AssumeRole
+
+  FunctionToUpdateEC2IMDSv2:
+    Type: "AWS::Lambda::Function"
+    Properties:
+      Environment:
+        Variables:
+          Regions:
+            Ref: Regions
+      Code:
+        ZipFile: |
+          import boto3
+          import logging
+          import os, datetime, json
+          log = logging.getLogger()
+          log.setLevel(logging.INFO)
+
+          Regions = []
+
+          def modify_metadata(region):
+            ec2client = boto3.client('ec2', region_name=str(region))
+            instances = ec2client.describe_instances()
+            list_instances_modified = []
+            for reservation in instances['Reservations']:
+              for instance in reservation['Instances']:
+                d = next((d for d in instance['Tags'] if d.get('Key') == 'k8s.io/cluster-autoscaler/enabled'), None)
+                if d is not None:
+                  if d['Value'] == 'true':
+                    metadata = instance['MetadataOptions']
+                    if ((metadata['HttpTokens'] == 'optional') and (instance['State']['Name']!="terminated")):
+                      print ("Instance metadata for "+instance['InstanceId']+" has been updated succssfully to IMDSv2")
+                      list_instances_modified.append(instance['InstanceId'])
+                      response = ec2client.modify_instance_metadata_options(
+                                    InstanceId=instance['InstanceId'],
+                                    HttpTokens='required',
+                                    HttpEndpoint='enabled'
+                                )
+                    else:
+                      print("No changes required for Instance "+instance['InstanceId']+" is already up to date with IMDSv2")
+                  else:
+                    print("No changes required - required tag 'k8s.io/cluster-autoscaler/enabled-true' does not exist for Instance "+instance['InstanceId'])
+      
+            return list_instances_modified
+
+          def lambda_handler (event, context):
+            Regions = str(os.getenv('Regions')).split(",")
+            instances_modified_per_region = {}
+            for region in Regions:
+              list_instances = modify_metadata(region)
+              print (list_instances)
+              instances_modified_per_region[region] = list_instances
+    
+            print (instances_modified_per_region)
+            return instances_modified_per_region
+      Description: "Update EC2 Instances to IMDSv2"
+      Handler: index.lambda_handler
+      MemorySize: 1024
+      Role: !GetAtt UpdateEC2IMDSv2LambdaIAMRole.Arn
+      Runtime: python3.9
+      Timeout: 600
+
+  EventToIdentifyInstanceCreation:
+    Type: AWS::Events::Rule
+    Properties: 
+      Description: "Event Rule to trigger Lambda when ever a new instance is created"
+      EventBusName: "default"
+      EventPattern: 
+        {
+          "source": ["aws.ec2"],
+          "detail-type": ["EC2 Instance State-change Notification"],
+          "detail": {
+              "state": ["pending", "running"]
+          }
+        }
+      Name: "MonitorInstanceCreation"
+      State: "ENABLED"
+      Targets: 
+        - Arn: !GetAtt FunctionToUpdateEC2IMDSv2.Arn
+          Id: 'Function_To_Update_Ec2_IMDSv2'
+    
+  EventToSchedule:
+    Type: AWS::Events::Rule
+    Properties: 
+      Description: "Event Rule to trigger Lambda when ever a new instance is created"
+      EventBusName: "default"
+      ScheduleExpression: "rate(6 hours)"
+      Name: "ScheduledRuleToUpdateIMDSv2"
+      State: "ENABLED"
+      Targets: 
+        - Arn: !GetAtt FunctionToUpdateEC2IMDSv2.Arn
+          Id: 'Function_To_Update_Ec2_IMDSv2'
+
+
+
+  PermissionToInvokeLambda:
+      Type: "AWS::Lambda::Permission"
+      Properties:
+        FunctionName: !Ref FunctionToUpdateEC2IMDSv2
+        Action: "lambda:InvokeFunction"
+        Principal: "events.amazonaws.com"
+        SourceArn: !GetAtt EventToIdentifyInstanceCreation.Arn
+  
+  PermissionToInvokeLambda2:
+      Type: "AWS::Lambda::Permission"
+      Properties:
+        FunctionName: !Ref FunctionToUpdateEC2IMDSv2
+        Action: "lambda:InvokeFunction"
+        Principal: "events.amazonaws.com"
+        SourceArn: !GetAtt EventToSchedule.Arn
+
+  
