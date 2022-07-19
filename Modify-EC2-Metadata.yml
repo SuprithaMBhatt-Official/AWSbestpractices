@@ -58,7 +58,7 @@ Resources:
                     else:
                       print("No changes required for Instance "+instance['InstanceId']+" is already up to date with IMDSv2")
                   else:
-                    print("No changes required - required tag 'k8s.io/cluster-autoscaler/enabled-true' does not exist for Instance "+instance['InstanceId'])
+                    print("No changes required - required tag 'tagnamehere' does not exist for Instance "+instance['InstanceId'])
       
             return list_instances_modified
 
